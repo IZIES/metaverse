@@ -12,6 +12,7 @@ export function presentSpaceListItem(space: any, userId: string) {
 }
 
 export function presentSpaceDetail(space: any, userId: string) {
+  const privateZones = sanitizePrivateZones(space.privateZones, space.width, space.height);
   return {
     id: space.id,
     name: space.name,
@@ -21,7 +22,7 @@ export function presentSpaceDetail(space: any, userId: string) {
     currentUserRole: getSpaceRole(space, userId),
     canEdit: canEditSpace(space, userId),
     elements: space.elements.map(presentSpaceElement),
-    privateZones: mergePrivateZonesWithDraft(space.privateZones, space.studioDraft?.data),
+    privateZones: mergePrivateZonesWithDraft(privateZones, space.studioDraft?.data),
   };
 }
 
@@ -73,6 +74,37 @@ function mergePrivateZonesWithDraft(privateZones: any[], draftData: any) {
       isDefaultSpawn: Boolean(zone.isDefaultSpawn || draftArea.isDefaultSpawn),
     };
   });
+}
+
+function sanitizePrivateZones(privateZones: any[], width: number, height?: number | null) {
+  const mapHeight = height ?? 0;
+  return (privateZones || [])
+    .map((zone: any) => ({
+      ...zone,
+      type: normalizeZoneType(zone),
+    }))
+    .filter((zone: any) =>
+      Number.isInteger(zone.startX) &&
+      Number.isInteger(zone.startY) &&
+      Number.isInteger(zone.endX) &&
+      Number.isInteger(zone.endY) &&
+      zone.startX >= 0 &&
+      zone.startY >= 0 &&
+      zone.endX > zone.startX &&
+      zone.endY > zone.startY &&
+      zone.endX <= width &&
+      zone.endY <= mapHeight
+    );
+}
+
+function normalizeZoneType(zone: any) {
+  const text = `${zone.name || ""} ${zone.type || ""}`.toLowerCase();
+  if (text.includes("portal")) return "portal";
+  if (text.includes("spawn")) return "spawn";
+  if (text.includes("spotlight")) return "spotlight";
+  if (text === "spot" || text.includes(" spot")) return "seat";
+  if (zone.type === "private") return "room";
+  return zone.type || "public";
 }
 
 function readCustomData(customData: unknown): Record<string, any> {

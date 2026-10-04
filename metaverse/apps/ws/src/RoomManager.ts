@@ -324,12 +324,46 @@ export class RoomManager {
 
   public async loadSpaceZones(spaceId: string) {
     if (this.zones.has(spaceId)) return;
-    const zones = await client.privateZone.findMany({ where: { spaceId } });
-    this.zones.set(spaceId, zones);
+    const space = await client.space.findUnique({
+      where: { id: spaceId },
+      select: {
+        width: true,
+        height: true,
+        privateZones: true,
+      },
+    });
+    this.zones.set(spaceId, this.sanitizeZones(space?.privateZones || [], space?.width || 0, space?.height || 0));
   }
 
   public clearSpaceBounds(spaceId: string) {
     this.spaceBounds.clear(spaceId);
+  }
+
+  private sanitizeZones(zones: any[], width: number, height: number) {
+    return zones
+      .map((zone) => ({ ...zone, type: this.normalizeZoneType(zone) }))
+      .filter((zone) =>
+        Number.isInteger(zone.startX) &&
+        Number.isInteger(zone.startY) &&
+        Number.isInteger(zone.endX) &&
+        Number.isInteger(zone.endY) &&
+        zone.startX >= 0 &&
+        zone.startY >= 0 &&
+        zone.endX > zone.startX &&
+        zone.endY > zone.startY &&
+        zone.endX <= width &&
+        zone.endY <= height
+      );
+  }
+
+  private normalizeZoneType(zone: any) {
+    const text = `${zone.name || ""} ${zone.type || ""}`.toLowerCase();
+    if (text.includes("portal")) return "portal";
+    if (text.includes("spawn")) return "spawn";
+    if (text.includes("spotlight")) return "spotlight";
+    if (text === "spot" || text.includes(" spot")) return "seat";
+    if (zone.type === "private") return "room";
+    return zone.type || "public";
   }
 
   public async loadSpaceBounds(spaceId: string, forceReload = false) {

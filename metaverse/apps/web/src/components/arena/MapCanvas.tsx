@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { OtherUser } from '../Arena';
 import type { SpaceElement } from './ElementsPanel';
 import { findPath } from '../../utils/pathfinding';
@@ -136,6 +136,28 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const hasDraggedRef = useRef(false);
 
   // ── Mouse Drag / Free Camera Pan Map ────────────────
+  const updatePanFromDrag = useCallback((clientX: number, clientY: number) => {
+    if (!dragStartRef.current) return;
+
+    if (builderMode === 'brush' || builderMode === 'eraser') {
+      applyBuilderAction(clientX, clientY);
+      return;
+    }
+
+    const dist = Math.hypot(clientX - dragStartRef.current.x, clientY - dragStartRef.current.y);
+    if (dist > 4) {
+      hasDraggedRef.current = true;
+      onManualControl?.();
+    }
+
+    const dx = (clientX - dragStartRef.current.x) / currentCamRef.current.zoom;
+    const dy = (clientY - dragStartRef.current.y) / currentCamRef.current.zoom;
+    setPanOffset({
+      x: initialPanRef.current.x - dx,
+      y: initialPanRef.current.y - dy,
+    });
+  }, [builderMode, onManualControl, setPanOffset]);
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     setIsDragging(true);
@@ -176,29 +198,32 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isDragging || !dragStartRef.current) return;
-
-    if (builderMode === 'brush' || builderMode === 'eraser') {
-      applyBuilderAction(e.clientX, e.clientY);
-      return;
-    }
-
-    const dist = Math.hypot(e.clientX - dragStartRef.current.x, e.clientY - dragStartRef.current.y);
-    if (dist > 4) {
-      hasDraggedRef.current = true;
-      onManualControl?.();
-    }
-    const dx = (e.clientX - dragStartRef.current.x) / currentCamRef.current.zoom;
-    const dy = (e.clientY - dragStartRef.current.y) / currentCamRef.current.zoom;
-    setPanOffset({
-      x: initialPanRef.current.x - dx,
-      y: initialPanRef.current.y - dy,
-    });
+    updatePanFromDrag(e.clientX, e.clientY);
   };
 
   const handleMouseUp = () => {
     setIsDragging(false);
     dragStartRef.current = null;
   };
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleWindowMove = (event: MouseEvent) => {
+      updatePanFromDrag(event.clientX, event.clientY);
+    };
+    const handleWindowUp = () => {
+      setIsDragging(false);
+      dragStartRef.current = null;
+    };
+
+    window.addEventListener('mousemove', handleWindowMove);
+    window.addEventListener('mouseup', handleWindowUp);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMove);
+      window.removeEventListener('mouseup', handleWindowUp);
+    };
+  }, [isDragging, updatePanFromDrag]);
 
   // ── Click-to-move (A* Pathfinding to clicked tile) ──────────────────────
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -296,15 +321,16 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     let camX = playerPx - (viewW / activeZoom) / 2 + panOffset.x;
     let camY = playerPy - (viewH / activeZoom) / 2 + panOffset.y;
 
-    // Handle camera bounds. Keep a little free pan even when the whole map fits
-    // so drag does not feel broken in overview mode.
+    // Handle camera bounds. Keep generous free-pan around the world so the map
+    // can be inspected like a canvas without confusing it with playable tiles.
     const visibleWorldW = viewW / activeZoom;
     const visibleWorldH = viewH / activeZoom;
-    const padding = Math.max(TILE * 3, Math.min(visibleWorldW, visibleWorldH) * 0.18);
-    const minCamX = worldW <= visibleWorldW ? -(visibleWorldW - worldW) / 2 - padding : -padding;
-    const maxCamX = worldW <= visibleWorldW ? -(visibleWorldW - worldW) / 2 + padding : worldW - visibleWorldW + padding;
-    const minCamY = worldH <= visibleWorldH ? -(visibleWorldH - worldH) / 2 - padding : -padding;
-    const maxCamY = worldH <= visibleWorldH ? -(visibleWorldH - worldH) / 2 + padding : worldH - visibleWorldH + padding;
+    const panPaddingX = Math.max(TILE * 12, visibleWorldW * 0.9);
+    const panPaddingY = Math.max(TILE * 12, visibleWorldH * 0.9);
+    const minCamX = worldW <= visibleWorldW ? -(visibleWorldW - worldW) / 2 - panPaddingX : -panPaddingX;
+    const maxCamX = worldW <= visibleWorldW ? -(visibleWorldW - worldW) / 2 + panPaddingX : worldW - visibleWorldW + panPaddingX;
+    const minCamY = worldH <= visibleWorldH ? -(visibleWorldH - worldH) / 2 - panPaddingY : -panPaddingY;
+    const maxCamY = worldH <= visibleWorldH ? -(visibleWorldH - worldH) / 2 + panPaddingY : worldH - visibleWorldH + panPaddingY;
 
     camX = Math.max(minCamX, Math.min(camX, maxCamX));
     camY = Math.max(minCamY, Math.min(camY, maxCamY));
@@ -312,7 +338,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     // Save current camera transform parameters for mouse click calculations
     currentCamRef.current = { camX, camY, zoom: activeZoom };
 
-    ctx.fillStyle = '#dcf0e2'; // Match map background to hide boundaries
+    // Outside the playable map. Keep it visually distinct so padded camera
+    // space does not look like walkable floor.
+    ctx.fillStyle = '#c8d8cf';
     ctx.fillRect(0, 0, viewW, viewH);
 
     ctx.save();
@@ -322,6 +350,13 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     // Gather-style base office floor to match Studio (dcf0e2)
     ctx.fillStyle = '#dcf0e2';
     ctx.fillRect(0, 0, worldW, worldH);
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.22)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.strokeRect(1, 1, Math.max(0, worldW - 2), Math.max(0, worldH - 2));
+    ctx.restore();
 
     const isDiagramMode = activeZoom < 0.8;
 

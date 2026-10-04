@@ -81,8 +81,16 @@ async function syncDraftElements(spaceId: string, elements: any[]) {
 async function syncDraftAreas(spaceId: string, areas: any[]) {
   await client.privateZone.deleteMany({ where: { spaceId } });
 
+  const space = await client.space.findUnique({
+    where: { id: spaceId },
+    select: { width: true, height: true },
+  });
+  const mapWidth = space?.width ?? 0;
+  const mapHeight = space?.height ?? 0;
+
   let defaultSpawnConsumed = false;
   const areasToInsert = areas.map((area: any) => {
+    if (!isValidAreaBounds(area, mapWidth, mapHeight)) return null;
     const isDefaultSpawn = area.type === "spawn" && Boolean(area.isDefaultSpawn) && !defaultSpawnConsumed;
     if (isDefaultSpawn) defaultSpawnConsumed = true;
 
@@ -105,11 +113,24 @@ async function syncDraftAreas(spaceId: string, areas: any[]) {
       targetX: area.type === "portal" && Number.isInteger(area.targetX) ? area.targetX : undefined,
       targetY: area.type === "portal" && Number.isInteger(area.targetY) ? area.targetY : undefined,
     };
-  });
+  }).filter((area: any): area is NonNullable<typeof area> => area !== null);
 
   if (areasToInsert.length > 0) {
     await client.privateZone.createMany({ data: areasToInsert });
   }
+}
+
+function isValidAreaBounds(area: any, width: number, height: number) {
+  return Number.isInteger(area?.x) &&
+    Number.isInteger(area?.y) &&
+    Number.isInteger(area?.w) &&
+    Number.isInteger(area?.h) &&
+    area.w > 0 &&
+    area.h > 0 &&
+    area.x >= 0 &&
+    area.y >= 0 &&
+    area.x + area.w <= width &&
+    area.y + area.h <= height;
 }
 
 async function createMapVersion(spaceId: string, data: any, userId: string) {
